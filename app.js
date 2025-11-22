@@ -270,19 +270,19 @@ class KiteFlow {
             const hourlyForecastUrl = pointData.properties.forecastHourly;
             const observationUrl = pointData.properties.observationStations;
 
-            // Get current observations
+            // Get current observations - find best station for this location
             let observationData = null;
             try {
                 const stationsResponse = await fetch(observationUrl);
                 const stationsData = await stationsResponse.json();
                 
                 if (stationsData.features && stationsData.features.length > 0) {
-                    const stationUrl = stationsData.features[0].properties.stationIdentifier;
-                    const obsUrl = `https://api.weather.gov/stations/${stationUrl}/observations/latest`;
-                    const obsResponse = await fetch(obsUrl);
-                    if (obsResponse.ok) {
-                        observationData = await obsResponse.json();
-                    }
+                    // Find the best station - closest to our location and with recent data
+                    observationData = await this.findBestObservationStation(
+                        stationsData.features,
+                        this.currentLocation.lat,
+                        this.currentLocation.lon
+                    );
                 }
             } catch (e) {
                 console.warn('Could not fetch observations:', e);
@@ -296,11 +296,46 @@ class KiteFlow {
             const forecastResponse = await fetch(forecastUrl);
             const forecastData = await forecastResponse.json();
 
+            // If observation is from a station far away (>20km) or old, prefer forecast data
+            let useForecastForCurrent = false;
+            if (observationData && this.currentStationInfo) {
+                const stationDistance = parseFloat(this.currentStationInfo.distance);
+                const obsTime = observationData.properties?.timestamp;
+                const isOld = obsTime && (Date.now() - new Date(obsTime).getTime()) > 3600000; // > 1 hour old
+                
+                if (stationDistance > 20 || isOld) {
+                    useForecastForCurrent = true;
+                    console.log(`Station too far (${stationDistance}km) or old, using forecast data`);
+                }
+            }
+
+            // Use hourly forecast for current conditions if observation is poor
+            if (useForecastForCurrent && hourlyData?.properties?.periods?.length > 0) {
+                const currentForecast = hourlyData.properties.periods[0];
+                // Create observation-like structure from forecast
+                const forecastWindSpeed = this.parseWindSpeed(currentForecast.windSpeed);
+                const forecastWindDir = currentForecast.windDirection?.value || 0;
+                
+                if (forecastWindSpeed > 0) {
+                    observationData = {
+                        properties: {
+                            windSpeed: { value: forecastWindSpeed * 0.514444 }, // knots to m/s
+                            windDirection: { value: forecastWindDir },
+                            temperature: { value: ((currentForecast.temperature - 32) * 5/9) }, // F to C
+                            textDescription: currentForecast.shortForecast || 'Forecast data',
+                            timestamp: currentForecast.startTime
+                        },
+                        source: 'forecast'
+                    };
+                }
+            }
+
             this.weatherData = {
                 observation: observationData,
                 hourlyForecast: hourlyData,
                 forecast: forecastData,
-                point: pointData
+                point: pointData,
+                useForecast: useForecastForCurrent
             };
 
         } catch (error) {
@@ -308,6 +343,108 @@ class KiteFlow {
             // Fallback: use mock data or OpenWeatherMap if available
             await this.loadFallbackWeatherData();
         }
+    }
+
+    async findBestObservationStation(stations, targetLat, targetLon) {
+        const stationPromises = stations.slice(0, 10).map(async (station) => {
+            try {
+                const stationId = station.properties.stationIdentifier;
+                const obsUrl = `https://api.weather.gov/stations/${stationId}/observations/latest`;
+                const obsResponse = await fetch(obsUrl);
+                
+                if (!obsResponse.ok) {
+                    return null;
+                }
+                
+                const obsData = await obsResponse.json();
+                const props = obsData.properties || {};
+                
+                // Check if we have wind data and it's recent (within last hour)
+                const windSpeed = props.windSpeed?.value;
+                const observationTime = props.timestamp ? new Date(props.timestamp) : null;
+                const isRecent = observationTime && (Date.now() - observationTime.getTime()) < 3600000; // 1 hour
+                
+                if (!windSpeed && !props.temperature?.value) {
+                    return null; // Station has no useful data
+                }
+                
+                // Calculate distance from target location
+                const stationCoords = station.geometry?.coordinates;
+                let distance = 999999;
+                if (stationCoords && stationCoords.length >= 2) {
+                    const stationLon = stationCoords[0];
+                    const stationLat = stationCoords[1];
+                    distance = this.calculateDistance(targetLat, targetLon, stationLat, stationLon);
+                }
+                
+                // Score the station
+                let score = 1000 / (distance + 1); // Closer = better score
+                if (windSpeed) score += 50; // Has wind data
+                if (isRecent) score += 100; // Recent data
+                
+                // Prefer coastal stations (check station name/id for keywords)
+                const stationName = (station.properties?.name || stationId || '').toLowerCase();
+                const coastalKeywords = ['beach', 'buoy', 'coast', 'marina', 'harbor', 'port', 'cape', 'dennis'];
+                if (coastalKeywords.some(keyword => stationName.includes(keyword))) {
+                    score += 200; // Big boost for coastal stations
+                }
+                
+                const stationDisplayName = station.properties?.name || stationId;
+                
+                return {
+                    data: obsData,
+                    distance,
+                    score,
+                    stationId,
+                    stationName: stationDisplayName,
+                    hasWind: !!windSpeed,
+                    isRecent
+                };
+            } catch (error) {
+                console.warn(`Error fetching station ${station.properties?.stationIdentifier}:`, error);
+                return null;
+            }
+        });
+        
+        const results = await Promise.all(stationPromises);
+        const validResults = results.filter(r => r !== null);
+        
+        if (validResults.length === 0) {
+            return null;
+        }
+        
+        // Sort by score (best first)
+        validResults.sort((a, b) => b.score - a.score);
+        
+        // Log which station we're using for debugging
+        const best = validResults[0];
+        console.log(`Using station: ${best.stationName} (${best.stationId}), distance: ${best.distance.toFixed(2)}km`);
+        
+        // Store station info for display
+        this.currentStationInfo = {
+            name: best.stationName,
+            id: best.stationId,
+            distance: best.distance.toFixed(1)
+        };
+        
+        return best.data;
+    }
+
+    calculateDistance(lat1, lon1, lat2, lon2) {
+        // Haversine formula to calculate distance in km
+        const R = 6371; // Earth's radius in km
+        const dLat = this.toRad(lat2 - lat1);
+        const dLon = this.toRad(lon2 - lon1);
+        const a = 
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(this.toRad(lat1)) * Math.cos(this.toRad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    toRad(degrees) {
+        return degrees * (Math.PI / 180);
     }
 
     async loadFallbackWeatherData() {
@@ -404,14 +541,44 @@ class KiteFlow {
         return { predictions };
     }
 
+    parseWindSpeed(windSpeedStr) {
+        // Parse wind speed string like "15 mph" or "15 knots" or "15"
+        if (!windSpeedStr) return 0;
+        const match = windSpeedStr.toString().match(/(\d+(?:\.\d+)?)/);
+        if (!match) return 0;
+        
+        const speed = parseFloat(match[1]);
+        const unit = windSpeedStr.toString().toLowerCase();
+        
+        // Convert to knots
+        if (unit.includes('mph')) {
+            return speed * 0.868976; // mph to knots
+        } else if (unit.includes('kt') || unit.includes('knot')) {
+            return speed;
+        } else {
+            // Assume knots if no unit specified
+            return speed;
+        }
+    }
+
     updateWindDisplay() {
         if (!this.weatherData || !this.weatherData.observation) {
             return;
         }
 
         const obs = this.weatherData.observation.properties;
-        const windSpeedMs = obs.windSpeed?.value || 0;
-        const windSpeedKnots = windSpeedMs * 1.944; // Convert m/s to knots
+        
+        // Handle both observation format (m/s) and forecast format (knots or mph)
+        let windSpeedKnots = 0;
+        if (obs.windSpeed?.value !== undefined) {
+            // Observation data is in m/s
+            const windSpeedMs = obs.windSpeed.value || 0;
+            windSpeedKnots = windSpeedMs * 1.944; // Convert m/s to knots
+        } else if (obs.windSpeedStr) {
+            // Forecast data might be in string format
+            windSpeedKnots = this.parseWindSpeed(obs.windSpeedStr);
+        }
+        
         const windDirection = obs.windDirection?.value || 0;
         const tempC = obs.temperature?.value || 0;
         const tempF = (tempC * 9/5) + 32;
@@ -432,6 +599,28 @@ class KiteFlow {
 
         // Update condition
         document.getElementById('condition').textContent = obs.textDescription || 'Clear';
+        
+        // Update data source info
+        this.updateDataSourceInfo();
+    }
+
+    updateDataSourceInfo() {
+        const sourceInfo = document.getElementById('sourceInfo');
+        if (!sourceInfo) return;
+        
+        if (this.currentStationInfo) {
+            const stationName = this.currentStationInfo.name;
+            const distance = this.currentStationInfo.distance;
+            sourceInfo.textContent = `${stationName} (${distance}km away)`;
+            
+            if (this.weatherData?.useForecast) {
+                sourceInfo.textContent += ' • Using forecast data';
+            }
+        } else if (this.weatherData?.observation?.source === 'forecast') {
+            sourceInfo.textContent = 'Forecast data (nearest observation station unavailable)';
+        } else {
+            sourceInfo.textContent = 'Weather.gov observation';
+        }
     }
 
     updateWindArrow(direction) {
