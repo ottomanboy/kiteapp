@@ -140,6 +140,12 @@ header {
     border: 1px solid #ffc107;
 }
 
+.error.success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #28a745;
+}
+
 .hidden {
     display: none;
 }

@@ -48,41 +48,184 @@ class KiteFlow {
 
         try {
             this.showLoading(true);
-            const coords = await this.geocodeLocation(query);
-            if (coords) {
-                this.currentLocation = { ...coords, name: query };
+            this.hideError();
+            
+            const result = await this.geocodeLocation(query);
+            if (result && result.coords) {
+                const foundName = result.displayName || query;
+                this.currentLocation = { 
+                    ...result.coords, 
+                    name: foundName
+                };
+                // Update the input to show what was actually found
+                document.getElementById('locationInput').value = foundName;
+                // Show success message briefly
+                this.showSuccessMessage(`✓ Found: ${foundName}`);
                 await this.loadInitialData();
+            } else {
+                this.showError(`Location "${query}" not found. Try being more specific (e.g., "La Ventana, Baja California, Mexico" or include country name).`);
             }
         } catch (error) {
-            this.showError('Location not found. Please try again.');
+            console.error('Search error:', error);
+            this.showError('Error searching for location. Please check your connection and try again.');
         } finally {
             this.showLoading(false);
         }
     }
 
     async geocodeLocation(query) {
-        // Using OpenStreetMap Nominatim API (free, no key required)
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+        // Strategy 1: Direct search with original query
+        let result = await this.searchNominatim(query, 5);
+        if (result && result.length > 0) {
+            return this.selectBestResult(result, query);
+        }
+
+        // Strategy 2: Try adding context for known kiting locations
+        const kitingLocations = {
+            'la ventana': 'La Ventana, Baja California Sur, Mexico',
+            'ventana': 'La Ventana, Baja California Sur, Mexico',
+            'baja': 'Baja California Sur, Mexico',
+            'hatteras': 'Hatteras, Outer Banks, North Carolina, USA',
+            'sherman': 'Sherman Island, California, USA',
+            'corpus christi': 'Corpus Christi, Texas, USA',
+            'maui': 'Kite Beach, Maui, Hawaii, USA',
+            'cape cod': 'Cape Cod, Massachusetts, USA',
+            'kalmus': 'Kalmus Beach, Hyannis, Cape Cod, MA, USA'
+        };
         
+        const lowerQuery = query.toLowerCase();
+        for (const [key, fullName] of Object.entries(kitingLocations)) {
+            if (lowerQuery.includes(key)) {
+                result = await this.searchNominatim(fullName, 3);
+                if (result && result.length > 0) {
+                    return this.selectBestResult(result, fullName);
+                }
+            }
+        }
+
+        // Strategy 3: Try with variations - add country if ambiguous
+        if (!query.includes(',')) {
+            // Try adding common countries for kiting
+            const variations = [
+                `${query}, Mexico`,
+                `${query}, USA`,
+                `${query}, United States`
+            ];
+            
+            for (const variation of variations) {
+                result = await this.searchNominatim(variation, 3);
+                if (result && result.length > 0) {
+                    return this.selectBestResult(result, variation);
+                }
+            }
+        }
+
+        // Strategy 4: Try partial matching with expanded search
+        const words = query.split(' ').filter(w => w.length > 2);
+        if (words.length > 1) {
+            // Try with just the main location words
+            const simplified = words.slice(0, 2).join(' ');
+            result = await this.searchNominatim(simplified, 10);
+            if (result && result.length > 0) {
+                // Filter results that contain our query words
+                const filtered = result.filter(r => {
+                    const display = (r.display_name || '').toLowerCase();
+                    return words.some(word => display.includes(word.toLowerCase()));
+                });
+                if (filtered.length > 0) {
+                    return this.selectBestResult(filtered, query);
+                }
+                return this.selectBestResult(result, query);
+            }
+        }
+
+        return null;
+    }
+
+    async searchNominatim(query, limit = 5) {
         try {
+            // Add small delay to respect rate limits
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=${limit}&addressdetails=1`;
+            
             const response = await fetch(url, {
                 headers: {
-                    'User-Agent': 'KiteFlow App'
+                    'User-Agent': 'KiteFlow-KiteSurfingApp/1.0',
+                    'Accept-Language': 'en-US,en;q=0.9'
                 }
             });
-            const data = await response.json();
-            
-            if (data && data.length > 0) {
-                return {
-                    lat: parseFloat(data[0].lat),
-                    lon: parseFloat(data[0].lon)
-                };
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
             }
-            return null;
+
+            const data = await response.json();
+            return data || [];
         } catch (error) {
-            console.error('Geocoding error:', error);
-            return null;
+            console.error('Nominatim search error:', error);
+            return [];
         }
+    }
+
+    selectBestResult(results, originalQuery) {
+        if (!results || results.length === 0) return null;
+
+        const lowerQuery = originalQuery.toLowerCase();
+        const words = lowerQuery.split(' ').filter(w => w.length > 2);
+
+        // Score each result
+        const scoredResults = results.map(result => {
+            let score = 0;
+            const displayName = (result.display_name || '').toLowerCase();
+            const type = (result.type || '').toLowerCase();
+            const classType = (result.class || '').toLowerCase();
+
+            // Exact match bonus
+            if (displayName.includes(lowerQuery)) {
+                score += 10;
+            }
+
+            // Word matching
+            words.forEach(word => {
+                if (displayName.includes(word)) {
+                    score += 3;
+                }
+            });
+
+            // Prefer places, cities, towns over other types
+            if (['city', 'town', 'village', 'place'].includes(classType)) {
+                score += 5;
+            }
+            if (type === 'city' || type === 'town') {
+                score += 3;
+            }
+
+            // Prefer locations with more detail (indicates it's well-known)
+            if (result.address) {
+                score += 2;
+            }
+
+            // Penalty for very generic matches
+            if (result.importance < 0.3) {
+                score -= 2;
+            }
+
+            return { ...result, score };
+        });
+
+        // Sort by score and return best match
+        scoredResults.sort((a, b) => b.score - a.score);
+        const best = scoredResults[0];
+
+        return {
+            coords: {
+                lat: parseFloat(best.lat),
+                lon: parseFloat(best.lon)
+            },
+            displayName: best.display_name || originalQuery,
+            importance: best.importance || 0
+        };
     }
 
     async loadInitialData() {
@@ -542,6 +685,7 @@ class KiteFlow {
     loadPopularSpots() {
         const spots = [
             { name: 'Kalmus Beach, Cape Cod', location: 'Hyannis, MA', description: 'Popular winter kiting spot, best with NW winds', wind: 'NW-NE' },
+            { name: 'La Ventana, Baja California Sur', location: 'Mexico', description: 'World-famous winter kiting destination, consistent thermal winds', wind: 'NE' },
             { name: 'Corpus Christi Beach', location: 'Texas', description: 'Year-round kiting paradise', wind: 'SE-SW' },
             { name: 'Hatteras Island', location: 'Outer Banks, NC', description: 'World-class conditions, consistent winds', wind: 'SW-NE' },
             { name: 'Maui Kite Beach', location: 'Hawaii', description: 'Tropical kiting with consistent trade winds', wind: 'NE' },
@@ -619,7 +763,19 @@ class KiteFlow {
     showError(message) {
         const errorDiv = document.getElementById('error');
         errorDiv.textContent = message;
+        errorDiv.className = 'error';
         errorDiv.classList.remove('hidden');
+    }
+
+    showSuccessMessage(message) {
+        const errorDiv = document.getElementById('error');
+        errorDiv.textContent = message;
+        errorDiv.className = 'error success';
+        errorDiv.classList.remove('hidden');
+        // Auto-hide after 3 seconds
+        setTimeout(() => {
+            this.hideError();
+        }, 3000);
     }
 
     hideError() {
