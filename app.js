@@ -272,6 +272,7 @@ class KiteFlow {
 
             // Get current observations - find best station for this location
             let observationData = null;
+            this.currentStationInfo = null; // Reset station info
             try {
                 const stationsResponse = await fetch(observationUrl);
                 const stationsData = await stationsResponse.json();
@@ -286,6 +287,7 @@ class KiteFlow {
                 }
             } catch (e) {
                 console.warn('Could not fetch observations:', e);
+                this.currentStationInfo = null;
             }
 
             // Get hourly forecast for wind data
@@ -337,6 +339,9 @@ class KiteFlow {
                 point: pointData,
                 useForecast: useForecastForCurrent
             };
+            
+            // Update source info immediately after weather data is loaded
+            this.updateDataSourceInfo();
 
         } catch (error) {
             console.error('Weather API error:', error);
@@ -608,18 +613,39 @@ class KiteFlow {
         const sourceInfo = document.getElementById('sourceInfo');
         if (!sourceInfo) return;
         
-        if (this.currentStationInfo) {
+        // If no weather data yet, show loading state
+        if (!this.weatherData) {
+            sourceInfo.textContent = 'Loading...';
+            return;
+        }
+        
+        // If we have station info, use it
+        if (this.currentStationInfo && this.currentStationInfo.name) {
             const stationName = this.currentStationInfo.name;
             const distance = this.currentStationInfo.distance;
-            sourceInfo.textContent = `${stationName} (${distance}km away)`;
+            let text = `${stationName}`;
+            if (distance) {
+                text += ` (${distance}km away)`;
+            }
             
             if (this.weatherData?.useForecast) {
-                sourceInfo.textContent += ' • Using forecast data';
+                text += ' • Using forecast data';
             }
-        } else if (this.weatherData?.observation?.source === 'forecast') {
+            sourceInfo.textContent = text;
+            return;
+        }
+        
+        // Check if using forecast data
+        if (this.weatherData?.observation?.source === 'forecast') {
             sourceInfo.textContent = 'Forecast data (nearest observation station unavailable)';
-        } else {
+            return;
+        }
+        
+        // Default fallback
+        if (this.weatherData?.observation) {
             sourceInfo.textContent = 'Weather.gov observation';
+        } else {
+            sourceInfo.textContent = 'Weather data unavailable';
         }
     }
 
