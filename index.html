@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KiteFlow - Kite Surfing Conditions & Spots</title>
+    <meta name="description" content="Real-time wind conditions, weather, tides, and spot information for kite surfers">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <h1>🌊 KiteFlow</h1>
+                <p class="tagline">Your Ultimate Kite Surfing Companion</p>
+            </div>
+        </header>
+
+        <div class="search-section">
+            <div class="search-box">
+                <input type="text" id="locationInput" placeholder="Search location (e.g., Cape Cod, MA)" value="Cape Cod, MA">
+                <button id="searchBtn">Search</button>
+            </div>
+            <div class="quick-locations">
+                <button class="quick-loc" data-lat="41.6868" data-lon="-70.2428">Cape Cod, MA</button>
+                <button class="quick-loc" data-lat="42.3601" data-lon="-71.0589">Boston, MA</button>
+                <button class="quick-loc" data-lat="40.7128" data-lon="-74.0060">New York, NY</button>
+                <button class="quick-loc" data-lat="38.9072" data-lon="-77.0369">Virginia Beach, VA</button>
+            </div>
+        </div>
+
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>Loading conditions...</p>
+        </div>
+
+        <div id="error" class="error hidden"></div>
+
+        <main id="mainContent">
+            <!-- Wind Conditions Card -->
+            <section class="card wind-card">
+                <h2>Wind Conditions</h2>
+                <div class="wind-display">
+                    <div class="wind-speed">
+                        <span class="speed-value" id="windSpeed">--</span>
+                        <span class="speed-unit">knots</span>
+                    </div>
+                    <div class="wind-direction">
+                        <div class="wind-arrow" id="windArrow">
+                            <svg viewBox="0 0 100 100">
+                                <circle cx="50" cy="50" r="45" fill="none" stroke="#e0e0e0" stroke-width="2"/>
+                                <line id="windLine" x1="50" y1="50" x2="50" y2="10" stroke="#4CAF50" stroke-width="4" stroke-linecap="round"/>
+                                <polygon id="windTriangle" points="50,10 45,20 55,20" fill="#4CAF50"/>
+                            </svg>
+                        </div>
+                        <span class="direction-text" id="windDirection">--</span>
+                    </div>
+                </div>
+                <div class="wind-details">
+                    <div class="detail-item">
+                        <span class="label">Gusts:</span>
+                        <span class="value" id="windGusts">--</span> knots
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Temperature:</span>
+                        <span class="value" id="temperature">--</span>°F
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Condition:</span>
+                        <span class="value" id="condition">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Kite Recommendation Card -->
+            <section class="card recommendation-card">
+                <h2>Kite Size Recommendation</h2>
+                <div class="recommendation-content">
+                    <div class="kite-size" id="kiteSize">
+                        <span class="size-number">--</span>
+                        <span class="size-unit">m²</span>
+                    </div>
+                    <div class="recommendation-text" id="kiteRecommendation">Enter weight and wind speed</div>
+                    <div class="weight-input">
+                        <label>Your Weight (lbs):</label>
+                        <input type="number" id="riderWeight" value="180" min="80" max="300">
+                    </div>
+                    <div class="wind-status" id="windStatus">
+                        <span class="status-indicator"></span>
+                        <span class="status-text">Checking conditions...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Forecast Card -->
+            <section class="card forecast-card">
+                <h2>Wind Forecast (24h)</h2>
+                <div class="forecast-chart" id="forecastChart">
+                    <canvas id="forecastCanvas"></canvas>
+                </div>
+                <div class="forecast-legend">
+                    <span>Wind Speed (knots)</span>
+                </div>
+            </section>
+
+            <!-- Tide Information Card -->
+            <section class="card tide-card">
+                <h2>Tide Information</h2>
+                <div class="tide-content" id="tideContent">
+                    <div class="tide-status">
+                        <div class="tide-phase" id="tidePhase">--</div>
+                        <div class="tide-time" id="tideTime">--</div>
+                    </div>
+                    <div class="tide-schedule" id="tideSchedule">
+                        <p>Loading tide data...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Popular Spots Card -->
+            <section class="card spots-card">
+                <h2>Popular Kiting Spots</h2>
+                <div class="spots-list" id="spotsList">
+                    <!-- Spots will be dynamically loaded -->
+                </div>
+            </section>
+
+            <!-- Safety & Conditions Card -->
+            <section class="card safety-card">
+                <h2>Safety & Conditions</h2>
+                <div class="safety-content" id="safetyContent">
+                    <div class="safety-alerts" id="safetyAlerts">
+                        <!-- Alerts will be dynamically loaded -->
+                    </div>
+                    <div class="conditions-checklist">
+                        <h3>Pre-Flight Checklist</h3>
+                        <ul>
+                            <li id="check1">Wind speed: 12-35 knots recommended</li>
+                            <li id="check2">Check tide conditions</li>
+                            <li id="check3">Review local hazards</li>
+                            <li id="check4">Verify equipment safety</li>
+                            <li id="check5">Inform someone of your location</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Built with ❤️ for kiters | Data from NOAA & Weather.gov</p>
+            <p class="disclaimer">Always prioritize safety. Conditions can change rapidly.</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
